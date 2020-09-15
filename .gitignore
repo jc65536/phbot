@@ -1,0 +1,8 @@
+# Ignore Gradle directories
+.gradle
+build
+bin
+
+.vscode
+*.txt
+*.json
