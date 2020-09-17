@@ -4,29 +4,46 @@
 package phbot;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.http.GenericUrl;
+import com.google.api.client.http.HttpContent;
+import com.google.api.client.http.HttpHeaders;
+import com.google.api.client.http.HttpRequest;
+import com.google.api.client.http.HttpRequestFactory;
 import com.google.api.client.http.HttpRequestInitializer;
+import com.google.api.client.http.HttpResponse;
+import com.google.api.client.http.UrlEncodedContent;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
+import com.google.api.client.json.JsonParser;
 import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.api.services.classroom.Classroom;
 import com.google.api.services.classroom.model.Course;
 import com.google.api.services.classroom.model.CourseWork;
 import com.google.api.services.classroom.model.ListCourseWorkResponse;
 import com.google.api.services.classroom.model.ListCoursesResponse;
+import com.google.api.services.classroom.model.TimeOfDay;
 import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.auth.oauth2.UserCredentials;
 
@@ -75,11 +92,94 @@ public class Bot {
         return "";
     }
 
+    static HttpResponse sendRequest(HttpRequest request) throws Exception {
+        // System.out.println("\n========== Request ==========");
+        // System.out.println(request.getRequestMethod() + " " +
+        // request.getUrl().build());
+        request.setThrowExceptionOnExecuteError(false);
+        request.getHeaders().forEach((s, o) -> {
+            // System.out.printf("%s: %s\n", s, o.toString());
+        });
+        if (request.getRequestMethod().equals("POST")) {
+            // System.out.println("\nBody:");
+            // request.getContent().writeTo(System.out);
+            // System.out.println();
+        }
+        HttpResponse response = request.execute();
+        // System.out.println("\n========== Response ==========");
+        // System.out.println(response.getStatusCode());
+        response.getHeaders().forEach((s, o) -> {
+            // System.out.printf("%s: %s\n", s, o.toString());
+        });
+        // System.out.println("\nContent:");
+        // byte[] content = new byte[1000]; //
+        // JSON_FACTORY.fromInputStream(response.getContent(), String.class);
+        // response.getContent().read(content);
+        // String contentStr = new String(content);
+        // System.out.println(contentStr);
+        return response;
+    }
+
     static List<String> getCoursework(String courseId) throws Exception {
-        Course course = service.courses().get(courseId).execute();
+        System.out.println("COURSE ID: " + courseId);
         List<String> returnList = new ArrayList<>();
-        System.out.println("Course requested:");
-        System.out.printf("%s\n", course.getName());
+
+        if (courseId.startsWith("sl")) {
+            HttpRequestFactory factory = HTTP_TRANSPORT.createRequestFactory();
+
+            HttpRequest request = factory.buildGetRequest(new GenericUrl("https://phhs.schoolloop.com/portal/login"));
+            HttpResponse response = sendRequest(request);
+
+            String cookies = response.getHeaders().get("set-cookie").toString();
+            Matcher idMatcher = Pattern.compile("JSESSIONID=[^;]+").matcher(cookies);
+            idMatcher.find();
+            String jsi = idMatcher.group();
+            String html = response.parseAsString();
+            idMatcher = Pattern.compile("form_data_id\" value=\"([^\"]+)").matcher(html);
+            idMatcher.find();
+            String fdi = idMatcher.group(1);
+
+            BufferedReader r = new BufferedReader(new FileReader("sl_password.txt"));
+            Map<String, String> params = new HashMap<>();
+            params.put("login_name", r.readLine());
+            params.put("password", r.readLine());
+            params.put("form_data_id", fdi);
+            params.put("event_override", "login");
+            r.close();
+            HttpContent postData = new UrlEncodedContent(params);
+
+            request = factory.buildPostRequest(
+                    new GenericUrl("https://phhs.schoolloop.com/portal/login?etarget=login_form"), postData);
+            request.getHeaders().setCookie(jsi).setContentType("application/x-www-form-urlencoded");
+            request.setFollowRedirects(false);
+            request.setThrowExceptionOnExecuteError(false);
+            response = sendRequest(request);
+
+            Scanner sc = new Scanner(courseId);
+            sc.next();
+            String groupId = sc.next();
+            String periodId = sc.next();
+            sc.close();
+            Calendar cal = Calendar.getInstance();
+            SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
+            String startDate = formatter.format(cal.getTime());
+            cal.add(Calendar.DATE, 3);
+            String endDate = formatter.format(cal.getTime());
+            String UrlString = String.format(
+                    "https://phhs.schoolloop.com/pf4/cal/eventsInRange?group_id=%s&period_id=%s&start_date=%s&end_date=%s",
+                    groupId, periodId, startDate, endDate);
+
+            request = factory.buildGetRequest(new GenericUrl(UrlString));
+            request.getHeaders().setCookie(jsi);
+            response = sendRequest(request);
+
+            List<Assignment> assignments = new ArrayList<>();
+
+            JsonParser parser = JSON_FACTORY.createJsonParser(response.getContent());
+            parser.parseArray(assignments, Assignment.class);
+            return assignments.stream().map(a -> a.toString().replaceAll("\\n", " ")).collect(Collectors.toList());
+        }
+
         ListCourseWorkResponse courseWorkResponse = service.courses().courseWork().list(courseId).setPageSize(3)
                 .execute();
         List<CourseWork> courseWork = courseWorkResponse.getCourseWork().stream().filter(w -> {
@@ -91,14 +191,9 @@ public class Bot {
             return dueDate.compareTo(Calendar.getInstance()) > 0;
         }).collect(Collectors.toList());
         if (courseWork == null || courseWork.size() == 0) {
-            System.out.println("\tNo upcoming coursework.");
             returnList.add("No upcoming coursework.");
         } else {
-            returnList.add("Upcoming coursework for **" + course.getName() + "**:");
-            returnList.addAll(courseWork.stream().map(i -> {
-                System.out.println(i.getTitle());
-                return "> " + i.getTitle();
-            }).collect(Collectors.toList()));
+            returnList.addAll(courseWork.stream().map(i -> i.getTitle()).collect(Collectors.toList()));
         }
         return returnList;
     }
@@ -120,17 +215,26 @@ public class Bot {
 
         commands.put("cw", event -> event.getMessage().getChannel().flatMap(channel -> {
             Snowflake chId = channel.getId();
-            System.out.println(((TextChannel) channel).getName() + ": " + chId.asString());
             String courseId = channelCourseMapper.get(chId);
             if (courseId.equals("")) {
                 return channel.createMessage("This is not a class channel.");
             }
-            List<String> courseWork;
+            List<String> courseWork = new ArrayList<>();
+            String courseName;
             try {
-                courseWork = getCoursework(courseId);
+                courseName = service.courses().get(courseId).execute().getName();
             } catch (Exception e) {
-                courseWork = new ArrayList<>();
-                courseWork.add("No upcoming coursework.");
+                courseName = "(error getting course name)";
+                System.out.println("Error getting course name:");
+                System.out.println(e.getMessage());
+            }
+            courseWork.add("Upcoming coursework for **" + courseName + "**:");
+            try {
+                courseWork.addAll(getCoursework(courseId).stream().map(s -> "\\> " + s).collect(Collectors.toList()));
+            } catch (Exception e) {
+                courseWork.add("> Error while getting coursework.");
+                System.out.println("Error while getting coursework:");
+                System.out.println(e.getMessage());
             }
             String message = "";
             for (String s : courseWork) {
@@ -147,7 +251,6 @@ public class Bot {
         });
 
         client.getEventDispatcher().on(MessageCreateEvent.class).subscribe(event -> {
-            System.out.println("MessageCreateEvent fired");
             final String content = event.getMessage().getContent();
             for (final Map.Entry<String, Command> entry : commands.entrySet()) {
                 if (content.startsWith('!' + entry.getKey())) {

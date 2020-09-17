@@ -3,6 +3,11 @@
 build
 bin
 
+.settings
 .vscode
-*.txt
-*.json
+channels.json
+client_secret.json
+courses.json
+discord_secret.txt
+oauth_tokens.json
+sl_password.txt
