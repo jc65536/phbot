@@ -5,7 +5,6 @@ bin
 
 .settings
 .vscode
-channels.json
 client_secret.json
 courses.json
 discord_secret.txt

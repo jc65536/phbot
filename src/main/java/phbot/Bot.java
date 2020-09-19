@@ -10,17 +10,20 @@ import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
+import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -37,7 +40,9 @@ import com.google.api.client.http.UrlEncodedContent;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.JsonParser;
+import com.google.api.client.json.JsonToken;
 import com.google.api.client.json.jackson2.JacksonFactory;
+import com.google.api.client.util.ArrayMap;
 import com.google.api.services.classroom.Classroom;
 import com.google.api.services.classroom.model.Course;
 import com.google.api.services.classroom.model.CourseWork;
@@ -53,6 +58,7 @@ import discord4j.core.GatewayDiscordClient;
 import discord4j.core.event.domain.lifecycle.ReadyEvent;
 import discord4j.core.event.domain.message.MessageCreateEvent;
 import discord4j.core.object.entity.Message;
+import discord4j.core.object.entity.Role;
 import discord4j.core.object.entity.User;
 import discord4j.core.object.entity.channel.TextChannel;
 
@@ -61,11 +67,12 @@ interface Command {
 }
 
 public class Bot {
+    static final Snowflake GUILD_ID = Snowflake.of("617861584005496859");
     private static final String APPLICATION_NAME = "phbot";
     private static final JsonFactory JSON_FACTORY = JacksonFactory.getDefaultInstance();
     static NetHttpTransport HTTP_TRANSPORT;
     private static Map<String, Command> commands = new HashMap<>();
-    private static Map<Snowflake, String> channelCourseMapper;
+    private static Map<Snowflake, ChannelInfo> channelMapper;
     static Classroom service;
 
     private static HttpRequestInitializer getGoogleCredentials(final NetHttpTransport HTTP_TRANSPORT)
@@ -93,42 +100,35 @@ public class Bot {
     }
 
     static HttpResponse sendRequest(HttpRequest request) throws Exception {
-        // System.out.println("\n========== Request ==========");
-        // System.out.println(request.getRequestMethod() + " " +
-        // request.getUrl().build());
-        request.setThrowExceptionOnExecuteError(false);
+        System.out.println("\n========== Request ==========");
+        System.out.println(request.getRequestMethod() + " " + request.getUrl().build());
+
         request.getHeaders().forEach((s, o) -> {
-            // System.out.printf("%s: %s\n", s, o.toString());
+            System.out.printf("%s: %s\n", s, o.toString());
         });
         if (request.getRequestMethod().equals("POST")) {
-            // System.out.println("\nBody:");
-            // request.getContent().writeTo(System.out);
-            // System.out.println();
+            System.out.println("\nBody:");
+            request.getContent().writeTo(System.out);
+            System.out.println();
         }
+
         HttpResponse response = request.execute();
-        // System.out.println("\n========== Response ==========");
-        // System.out.println(response.getStatusCode());
+
+        System.out.println("\n========== Response ==========");
+        System.out.println(response.getStatusCode());
         response.getHeaders().forEach((s, o) -> {
-            // System.out.printf("%s: %s\n", s, o.toString());
+            System.out.printf("%s: %s\n", s, o.toString());
         });
-        // System.out.println("\nContent:");
-        // byte[] content = new byte[1000]; //
-        // JSON_FACTORY.fromInputStream(response.getContent(), String.class);
-        // response.getContent().read(content);
-        // String contentStr = new String(content);
-        // System.out.println(contentStr);
-        return response;
+
+        return request.execute();
     }
 
-    static List<String> getCoursework(String courseId) throws Exception {
-        System.out.println("COURSE ID: " + courseId);
-        List<String> returnList = new ArrayList<>();
-
-        if (courseId.startsWith("sl")) {
+    static List<Assignment> getAssignments(ChannelInfo info) throws Exception {
+        if (info.getAppType().equals("SL")) {
             HttpRequestFactory factory = HTTP_TRANSPORT.createRequestFactory();
 
             HttpRequest request = factory.buildGetRequest(new GenericUrl("https://phhs.schoolloop.com/portal/login"));
-            HttpResponse response = sendRequest(request);
+            HttpResponse response = request.execute();
 
             String cookies = response.getHeaders().get("set-cookie").toString();
             Matcher idMatcher = Pattern.compile("JSESSIONID=[^;]+").matcher(cookies);
@@ -153,97 +153,118 @@ public class Bot {
             request.getHeaders().setCookie(jsi).setContentType("application/x-www-form-urlencoded");
             request.setFollowRedirects(false);
             request.setThrowExceptionOnExecuteError(false);
-            response = sendRequest(request);
+            request.execute();
 
-            Scanner sc = new Scanner(courseId);
-            sc.next();
-            String groupId = sc.next();
-            String periodId = sc.next();
-            sc.close();
+            String groupId = info.getGroupId();
+            String periodId = info.getPeriodId();
             Calendar cal = Calendar.getInstance();
             SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
             String startDate = formatter.format(cal.getTime());
             cal.add(Calendar.DATE, 3);
             String endDate = formatter.format(cal.getTime());
-            String UrlString = String.format(
+            String urlString = String.format(
                     "https://phhs.schoolloop.com/pf4/cal/eventsInRange?group_id=%s&period_id=%s&start_date=%s&end_date=%s",
                     groupId, periodId, startDate, endDate);
 
-            request = factory.buildGetRequest(new GenericUrl(UrlString));
+            request = factory.buildGetRequest(new GenericUrl(urlString));
             request.getHeaders().setCookie(jsi);
-            response = sendRequest(request);
+            response = request.execute();
 
             List<Assignment> assignments = new ArrayList<>();
 
             JsonParser parser = JSON_FACTORY.createJsonParser(response.getContent());
             parser.parseArray(assignments, Assignment.class);
-            return assignments.stream().map(a -> a.toString().replaceAll("\\n", " ")).collect(Collectors.toList());
+            assignments.forEach(a -> {
+                try {
+                    a.build();
+                } catch (ParseException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+            });
+            return assignments;
         }
 
-        ListCourseWorkResponse courseWorkResponse = service.courses().courseWork().list(courseId).setPageSize(3)
+        ListCourseWorkResponse courseWorkResponse = service.courses().courseWork().list(info.getGcId()).setPageSize(5)
                 .execute();
-        List<CourseWork> courseWork = courseWorkResponse.getCourseWork().stream().filter(w -> {
+        List<Assignment> assignments = courseWorkResponse.getCourseWork().stream().filter(w -> {
             var googleDate = w.getDueDate();
             if (googleDate == null)
                 return true;
             Calendar dueDate = Calendar.getInstance();
             dueDate.set(googleDate.getYear(), googleDate.getMonth() - 1, googleDate.getDay());
             return dueDate.compareTo(Calendar.getInstance()) > 0;
+        }).map(w -> {
+            Assignment a = new Assignment();
+            a.setTitle(w.getTitle());
+            var googleDate = w.getDueDate();
+            Calendar dueDate = Calendar.getInstance();
+            dueDate.set(googleDate.getYear(), googleDate.getMonth() - 1, googleDate.getDay());
+            a.setDueDate(dueDate);
+            return a;
         }).collect(Collectors.toList());
-        if (courseWork == null || courseWork.size() == 0) {
-            returnList.add("No upcoming coursework.");
-        } else {
-            returnList.addAll(courseWork.stream().map(i -> i.getTitle()).collect(Collectors.toList()));
-        }
-        return returnList;
+        return assignments;
     }
 
     public static void main(String[] args) throws Exception {
-        channelCourseMapper = ((Map<String, String>) JSON_FACTORY
-                .fromInputStream(new FileInputStream("snowflake_to_course.json"), Map.class)).entrySet().stream()
-                        .collect(Collectors.toMap(e -> Snowflake.of(e.getKey()), Map.Entry::getValue));
+        channelMapper = new HashMap<>();
+        JsonParser channelInfoParser = JSON_FACTORY.createJsonParser(new FileInputStream("channels.json"));
+        channelInfoParser.nextToken();
+        Map<?, ?> temp = channelInfoParser.parse(Map.class);
+        channelMapper = temp.entrySet().stream()
+                .collect(Collectors.toMap(e -> Snowflake.of(e.getKey().toString()), e -> {
+                    ChannelInfo c;
+                    try {
+                        c = JSON_FACTORY.fromString(JSON_FACTORY.toString(e.getValue()), ChannelInfo.class);
+                        c.build();
+                        return c;
+                    } catch (IOException ex) {
+                        return new ChannelInfo();
+                    }
+                }));
 
         // Build a new authorized API client service.
         HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport();
         service = new Classroom.Builder(HTTP_TRANSPORT, JSON_FACTORY, getGoogleCredentials(HTTP_TRANSPORT))
                 .setApplicationName(APPLICATION_NAME).build();
 
+        GatewayDiscordClient client = DiscordClientBuilder.create(readDiscordSecret()).build().login().block();
+
         commands.put("ping", event -> {
+            System.out.println(event.getMessage().getGuild().block().getId().asString());
             System.out.println("Pong!");
             event.getMessage().getChannel().flatMap(channel -> channel.createMessage("Pong!")).subscribe();
         });
 
         commands.put("cw", event -> event.getMessage().getChannel().flatMap(channel -> {
-            Snowflake chId = channel.getId();
-            String courseId = channelCourseMapper.get(chId);
-            if (courseId.equals("")) {
+            ChannelInfo info = channelMapper.get(channel.getId());
+            if (info.getAppType().equals("NA")) {
                 return channel.createMessage("This is not a class channel.");
             }
-            List<String> courseWork = new ArrayList<>();
+            List<Assignment> assignments = new ArrayList<>();
             String courseName;
+            courseName = info.getCourseName();
+            String title = "Upcoming coursework for " + courseName + ":";
             try {
-                courseName = service.courses().get(courseId).execute().getName();
+                assignments.addAll(getAssignments(info));
             } catch (Exception e) {
-                courseName = "(error getting course name)";
-                System.out.println("Error getting course name:");
-                System.out.println(e.getMessage());
-            }
-            courseWork.add("Upcoming coursework for **" + courseName + "**:");
-            try {
-                courseWork.addAll(getCoursework(courseId).stream().map(s -> "\\> " + s).collect(Collectors.toList()));
-            } catch (Exception e) {
-                courseWork.add("> Error while getting coursework.");
+                Assignment a = new Assignment();
+                a.setTitle("Error while getting coursework.");
+                assignments.add(a);
                 System.out.println("Error while getting coursework:");
                 System.out.println(e.getMessage());
             }
-            String message = "";
-            for (String s : courseWork) {
-                message += s + "\n";
-            }
-            return channel.createMessage(message);
+            Collections.sort(assignments);
+            return channel.createMessage(spec -> spec.setEmbed(embed -> {
+                embed.setTitle(title);
+                // embed.setDescription(messageBuilder.toString());
+                SimpleDateFormat formatter = new SimpleDateFormat("MM/dd");
+                assignments.forEach(a -> {
+                    embed.addField("Due " + formatter.format(a.getDueDate().getTime()) + ":", a.getTitle(), false);
+                });
+                embed.setColor(client.getRoleById(GUILD_ID, info.getRole()).map(r -> r.getColor()).block());
+            }));
         }).subscribe());
-
-        GatewayDiscordClient client = DiscordClientBuilder.create(readDiscordSecret()).build().login().block();
 
         client.getEventDispatcher().on(ReadyEvent.class).subscribe(event -> {
             User self = event.getSelf();
@@ -262,5 +283,6 @@ public class Bot {
         });
 
         client.onDisconnect().block();
+
     }
 }
