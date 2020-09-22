@@ -5,8 +5,13 @@ import com.google.api.client.util.Key;
 import discord4j.common.util.Snowflake;
 
 public class ChannelInfo {
+    public static final int NONE = 0, GOOGLE_CLASSROOM = 1, SCHOOL_LOOP = 2;
+
     @Key
-    private String channelName, courseName, appType, groupId, periodId, gcId, roleString;
+    private String channelName, courseName, groupId, periodId, gcId, roleString;
+
+    @Key
+    private int appType;
 
     private Snowflake role;
 
@@ -21,7 +26,7 @@ public class ChannelInfo {
         return courseName;
     }
 
-    public String getAppType() {
+    public int getAppType() {
         return appType;
     }
 
@@ -41,9 +46,10 @@ public class ChannelInfo {
         return role;
     }
 
-    public void build() {
+    public ChannelInfo build() {
         if (roleString != null)
             role = Snowflake.of(roleString);
+        return this;
     }
 
     @Override

@@ -4,26 +4,22 @@
 package phbot;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Scanner;
-import java.util.Set;
-import java.util.Map.Entry;
+import java.util.TimerTask;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -31,7 +27,6 @@ import java.util.stream.Collectors;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.HttpContent;
-import com.google.api.client.http.HttpHeaders;
 import com.google.api.client.http.HttpRequest;
 import com.google.api.client.http.HttpRequestFactory;
 import com.google.api.client.http.HttpRequestInitializer;
@@ -40,15 +35,9 @@ import com.google.api.client.http.UrlEncodedContent;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.JsonFactory;
 import com.google.api.client.json.JsonParser;
-import com.google.api.client.json.JsonToken;
 import com.google.api.client.json.jackson2.JacksonFactory;
-import com.google.api.client.util.ArrayMap;
 import com.google.api.services.classroom.Classroom;
-import com.google.api.services.classroom.model.Course;
-import com.google.api.services.classroom.model.CourseWork;
 import com.google.api.services.classroom.model.ListCourseWorkResponse;
-import com.google.api.services.classroom.model.ListCoursesResponse;
-import com.google.api.services.classroom.model.TimeOfDay;
 import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.auth.oauth2.UserCredentials;
 
@@ -57,10 +46,8 @@ import discord4j.core.DiscordClientBuilder;
 import discord4j.core.GatewayDiscordClient;
 import discord4j.core.event.domain.lifecycle.ReadyEvent;
 import discord4j.core.event.domain.message.MessageCreateEvent;
-import discord4j.core.object.entity.Message;
-import discord4j.core.object.entity.Role;
 import discord4j.core.object.entity.User;
-import discord4j.core.object.entity.channel.TextChannel;
+import discord4j.core.object.entity.channel.MessageChannel;
 
 interface Command {
     void execute(MessageCreateEvent event);
@@ -92,9 +79,11 @@ public class Bot {
                 return s;
             } catch (IOException e) {
                 System.out.println("Error: IOException while reading Discord secret");
+                System.exit(1);
             }
         } catch (FileNotFoundException e) {
             System.out.println("Error: Discord secret file missing");
+            System.exit(1);
         }
         return "";
     }
@@ -123,40 +112,36 @@ public class Bot {
         return request.execute();
     }
 
-    static List<Assignment> getAssignments(ChannelInfo info) throws Exception {
-        if (info.getAppType().equals("SL")) {
+    static List<Assignment> getAssignments(ChannelInfo channel) throws Exception {
+        if (channel.getAppType() == ChannelInfo.SCHOOL_LOOP) {
             HttpRequestFactory factory = HTTP_TRANSPORT.createRequestFactory();
 
             HttpRequest request = factory.buildGetRequest(new GenericUrl("https://phhs.schoolloop.com/portal/login"));
             HttpResponse response = request.execute();
 
             String cookies = response.getHeaders().get("set-cookie").toString();
-            Matcher idMatcher = Pattern.compile("JSESSIONID=[^;]+").matcher(cookies);
-            idMatcher.find();
-            String jsi = idMatcher.group();
+            Matcher matcher = Pattern.compile("JSESSIONID=[^;]+").matcher(cookies);
+            matcher.find();
+            String jsi = matcher.group();
             String html = response.parseAsString();
-            idMatcher = Pattern.compile("form_data_id\" value=\"([^\"]+)").matcher(html);
-            idMatcher.find();
-            String fdi = idMatcher.group(1);
+            matcher = Pattern.compile("form_data_id\" value=\"([^\"]+)").matcher(html);
+            matcher.find();
+            String fdi = matcher.group(1);
 
-            BufferedReader r = new BufferedReader(new FileReader("sl_password.txt"));
+            BufferedReader reader = new BufferedReader(new FileReader("sl_password.txt"));
             Map<String, String> params = new HashMap<>();
-            params.put("login_name", r.readLine());
-            params.put("password", r.readLine());
+            params.put("login_name", reader.readLine());
+            params.put("password", reader.readLine());
             params.put("form_data_id", fdi);
             params.put("event_override", "login");
-            r.close();
+            reader.close();
             HttpContent postData = new UrlEncodedContent(params);
 
             request = factory.buildPostRequest(
                     new GenericUrl("https://phhs.schoolloop.com/portal/login?etarget=login_form"), postData);
             request.getHeaders().setCookie(jsi).setContentType("application/x-www-form-urlencoded");
-            request.setFollowRedirects(false);
-            request.setThrowExceptionOnExecuteError(false);
-            request.execute();
+            request.setFollowRedirects(false).setThrowExceptionOnExecuteError(false).execute();
 
-            String groupId = info.getGroupId();
-            String periodId = info.getPeriodId();
             Calendar cal = Calendar.getInstance();
             SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd");
             String startDate = formatter.format(cal.getTime());
@@ -164,7 +149,7 @@ public class Bot {
             String endDate = formatter.format(cal.getTime());
             String urlString = String.format(
                     "https://phhs.schoolloop.com/pf4/cal/eventsInRange?group_id=%s&period_id=%s&start_date=%s&end_date=%s",
-                    groupId, periodId, startDate, endDate);
+                    channel.getGroupId(), channel.getPeriodId(), startDate, endDate);
 
             request = factory.buildGetRequest(new GenericUrl(urlString));
             request.getHeaders().setCookie(jsi);
@@ -178,46 +163,41 @@ public class Bot {
                 try {
                     a.build();
                 } catch (ParseException e) {
-                    // TODO Auto-generated catch block
                     e.printStackTrace();
                 }
             });
             return assignments;
         }
 
-        ListCourseWorkResponse courseWorkResponse = service.courses().courseWork().list(info.getGcId()).setPageSize(5)
-                .execute();
-        List<Assignment> assignments = courseWorkResponse.getCourseWork().stream().filter(w -> {
-            var googleDate = w.getDueDate();
+        ListCourseWorkResponse courseWorkResponse = service.courses().courseWork().list(channel.getGcId())
+                .setPageSize(5).execute();
+        return courseWorkResponse.getCourseWork().stream().filter(w -> {
+            com.google.api.services.classroom.model.Date googleDate = w.getDueDate();
             if (googleDate == null)
                 return true;
             Calendar dueDate = Calendar.getInstance();
             dueDate.set(googleDate.getYear(), googleDate.getMonth() - 1, googleDate.getDay());
             return dueDate.compareTo(Calendar.getInstance()) > 0;
         }).map(w -> {
-            Assignment a = new Assignment();
-            a.setTitle(w.getTitle());
-            var googleDate = w.getDueDate();
+            com.google.api.services.classroom.model.Date googleDate = w.getDueDate();
             Calendar dueDate = Calendar.getInstance();
             dueDate.set(googleDate.getYear(), googleDate.getMonth() - 1, googleDate.getDay());
-            a.setDueDate(dueDate);
+            dueDate.clear(Calendar.HOUR);
+            dueDate.clear(Calendar.MINUTE);
+            dueDate.clear(Calendar.SECOND);
+            dueDate.clear(Calendar.MILLISECOND);
+            Assignment a = new Assignment(w.getTitle(), dueDate, w.getAlternateLink());
             return a;
         }).collect(Collectors.toList());
-        return assignments;
     }
 
     public static void main(String[] args) throws Exception {
-        channelMapper = new HashMap<>();
         JsonParser channelInfoParser = JSON_FACTORY.createJsonParser(new FileInputStream("channels.json"));
-        channelInfoParser.nextToken();
         Map<?, ?> temp = channelInfoParser.parse(Map.class);
         channelMapper = temp.entrySet().stream()
                 .collect(Collectors.toMap(e -> Snowflake.of(e.getKey().toString()), e -> {
-                    ChannelInfo c;
                     try {
-                        c = JSON_FACTORY.fromString(JSON_FACTORY.toString(e.getValue()), ChannelInfo.class);
-                        c.build();
-                        return c;
+                        return JSON_FACTORY.fromString(JSON_FACTORY.toString(e.getValue()), ChannelInfo.class).build();
                     } catch (IOException ex) {
                         return new ChannelInfo();
                     }
@@ -230,21 +210,19 @@ public class Bot {
 
         GatewayDiscordClient client = DiscordClientBuilder.create(readDiscordSecret()).build().login().block();
 
-        commands.put("ping", event -> {
-            System.out.println(event.getMessage().getGuild().block().getId().asString());
-            System.out.println("Pong!");
-            event.getMessage().getChannel().flatMap(channel -> channel.createMessage("Pong!")).subscribe();
+        commands.put("p", event -> {
+            event.getMessage().getChannel().flatMap(channel -> channel.createMessage("@jasonc133")).subscribe();
         });
 
         commands.put("cw", event -> event.getMessage().getChannel().flatMap(channel -> {
             ChannelInfo info = channelMapper.get(channel.getId());
-            if (info.getAppType().equals("NA")) {
+            if (info.getAppType() == ChannelInfo.NONE) {
                 return channel.createMessage("This is not a class channel.");
             }
             List<Assignment> assignments = new ArrayList<>();
             String courseName;
             courseName = info.getCourseName();
-            String title = "Upcoming coursework for " + courseName + ":";
+            String title = "Upcoming coursework for " + courseName + "";
             try {
                 assignments.addAll(getAssignments(info));
             } catch (Exception e) {
@@ -257,14 +235,121 @@ public class Bot {
             Collections.sort(assignments);
             return channel.createMessage(spec -> spec.setEmbed(embed -> {
                 embed.setTitle(title);
-                // embed.setDescription(messageBuilder.toString());
                 SimpleDateFormat formatter = new SimpleDateFormat("MM/dd");
-                assignments.forEach(a -> {
-                    embed.addField("Due " + formatter.format(a.getDueDate().getTime()) + ":", a.getTitle(), false);
-                });
+                Calendar lastDate = assignments.get(0).getDueDate();
+                StringBuilder assignmentStringBuilder = new StringBuilder();
+                if (info.getAppType() == ChannelInfo.GOOGLE_CLASSROOM) {
+                    assignments.forEach(a -> {
+                        if (lastDate.compareTo(a.getDueDate()) != 0) {
+                            embed.addField("Due " + formatter.format(lastDate.getTime()),
+                                    assignmentStringBuilder.toString(), false);
+                            assignmentStringBuilder.setLength(0);
+                            lastDate.setTime(a.getDueDate().getTime());
+                        }
+                        assignmentStringBuilder.append(String.format("[%s](%s)\n", a.getTitle(), a.getUrl()));
+                    });
+                } else {
+                    assignments.forEach(a -> {
+                        if (lastDate.compareTo(a.getDueDate()) != 0) {
+                            embed.addField("Due " + formatter.format(lastDate.getTime()),
+                                    assignmentStringBuilder.toString(), false);
+                            assignmentStringBuilder.setLength(0);
+                            lastDate.setTime(a.getDueDate().getTime());
+                        }
+                        assignmentStringBuilder.append(a.getTitle() + "\n");
+                    });
+                }
+                embed.addField("Due " + formatter.format(lastDate.getTime()), assignmentStringBuilder.toString(),
+                        false);
                 embed.setColor(client.getRoleById(GUILD_ID, info.getRole()).map(r -> r.getColor()).block());
             }));
         }).subscribe());
+
+        commands.put("remindme", event -> {
+            MessageChannel channel = event.getMessage().getChannel().block();
+            String command = event.getMessage().getContent();
+
+            String remindMessage;
+            long repeat = 0;
+            long delay = 0;
+            String error = null;
+
+            Matcher optionMatcher = Pattern.compile("(?:-m|--message)\\s*+\\\"?((?<=\\\")[^\\\"]+(?=\\\")|\\S+)")
+                    .matcher(command);
+            if (optionMatcher.find()) {
+                command = command.substring(0, optionMatcher.start()) + command.substring(optionMatcher.end());
+                remindMessage = optionMatcher.group(1);
+            } else {
+                remindMessage = "Reminder!";
+            }
+
+            optionMatcher = Pattern.compile("(?:-o|--on)\\s*+\\\"?((?<=\\\")[^\\\"]+(?=\\\")|\\S+)").matcher(command);
+            if (optionMatcher.find()) {
+                command = command.substring(0, optionMatcher.start()) + command.substring(optionMatcher.end());
+                String dateString = optionMatcher.group(1);
+                SimpleDateFormat formatter = new SimpleDateFormat("MM/dd HH:mm");
+                Calendar remindDate = Calendar.getInstance();
+                Calendar now = Calendar.getInstance();
+                try {
+                    remindDate.setTime(formatter.parse(dateString));
+                    remindDate.set(Calendar.YEAR, now.get(Calendar.YEAR));
+                    if (remindDate.compareTo(now) < 0)
+                        remindDate.add(Calendar.YEAR, 1);
+                    delay = (remindDate.getTime().getTime() - now.getTime().getTime()) / 1000 / 60;
+                } catch (ParseException e) {
+                    error = "Reminder time was not specified.";
+                }
+            } else {
+                optionMatcher = Pattern.compile("(?:-i|--in)\\s*+\\\"?((?<=\\\")[^\\\"]+(?=\\\")|\\S+)")
+                        .matcher(command);
+                if (optionMatcher.find()) {
+                    command = command.substring(0, optionMatcher.start()) + command.substring(optionMatcher.end());
+                    String timeString = optionMatcher.group(1);
+                    optionMatcher = Pattern.compile(
+                            "\\s*(?:(\\d+)\\s*(?:days|d))?\\s*(?:(\\d+)\\s*(?:hours|h))?\\s*(?:(\\d+)\\s*(?:minutes|m))?\\s*")
+                            .matcher(timeString);
+                    optionMatcher.find();
+                    long d = 0;
+                    if (optionMatcher.group(1) != null)
+                        d += 24 * 60 * Integer.parseInt(optionMatcher.group(1));
+                    if (optionMatcher.group(2) != null)
+                        d += 60 * Integer.parseInt(optionMatcher.group(2));
+                    if (optionMatcher.group(3) != null)
+                        d += Integer.parseInt(optionMatcher.group(3));
+                    delay = d;
+                } else {
+                    error = "Reminder time was not specified.";
+                }
+            }
+
+            optionMatcher = Pattern.compile("(?:-r|--repeat)\\s*+(none|daily|weekly)").matcher(command);
+            if (optionMatcher.find()) {
+                switch (optionMatcher.group(1)) {
+                    case "daily":
+                        repeat = 24 * 60;
+                    case "weekly":
+                        repeat = 7 * 24 * 60;
+                }
+            }
+
+            if (error == null) {
+                TimerTask reminder = new TimerTask() {
+                    @Override
+                    public void run() {
+                        channel.createMessage(remindMessage).subscribe();
+                    }
+                };
+                System.out.printf("Reminder created:\n  delay = %d\n  repeat = %d\n  message = %s\n", delay, repeat, remindMessage);
+                ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+                if (repeat == 0) {
+                    executor.schedule(reminder, delay, TimeUnit.MINUTES);
+                } else {
+                    executor.scheduleAtFixedRate(reminder, delay, repeat, TimeUnit.MINUTES);
+                }
+            } else {
+                channel.createMessage(error).subscribe();
+            }
+        });
 
         client.getEventDispatcher().on(ReadyEvent.class).subscribe(event -> {
             User self = event.getSelf();

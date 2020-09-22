@@ -2,30 +2,31 @@
     "513450269594615841": {
         "channelName": "general",
         "courseName": "AP Econ/Gov",
-        "appType": "SL",
+        "appType": 1,
         "groupId": "1470119438260",
         "periodId": "1593846757685",
+        "gcId": "122965675647",
         "roleString": "750212371556991027"
     },
     "742855034840023091": {
         "channelName": "welcome",
-        "appType": "NA"
+        "appType": 0
     },
     "617861584026468401": {
         "channelName": "group-one-number-one",
-        "appType": "NA"
+        "appType": 0
     },
     "751513983000903731": {
         "channelName": "amurraycan-gov",
         "courseName": "Regular Gov/Econ",
-        "appType": "GC",
+        "appType": 1,
         "gcId": "122072863639",
         "roleString": "751514041779749046"
     },
     "750212262140313662": {
         "channelName": "hate-sarria-club",
         "courseName": "AP Econ/Gov",
-        "appType": "SL",
+        "appType": 2,
         "groupId": "1470119438260",
         "periodId": "1593846757685",
         "roleString": "750212371556991027"
@@ -33,26 +34,26 @@
     "741174271128109066": {
         "channelName": "adv-science",
         "courseName": "Physics C",
-        "appType": "GC",
+        "appType": 1,
         "gcId": "122073729639",
         "roleString": "742790362606600253"
     },
     "742509716369965077": {
         "channelName": "csgay",
         "courseName": "AP CSA",
-        "appType": "GC",
+        "appType": 1,
         "gcId": "122965675647",
         "roleString": "742510302171496498"
     },
     "746119924690190339": {
         "channelName": "stats",
         "courseName": "AP Statistics",
-        "appType": "GC",
+        "appType": 1,
         "gcId": "141705003342",
         "roleString": "746119977379168416"
     },
     "618232045595918353": {
         "channelName": "bot",
-        "appType": "NA"
+        "appType": 0
     }
 }
