@@ -222,14 +222,14 @@ public class Bot {
                 assignments = courseWorkResponse.getCourseWork().stream().map(w -> {
                     com.google.api.services.classroom.model.Date googleDate = w.getDueDate();
                     if (googleDate == null)
-                        return new Assignment(w.getId(), w.getTitle(), Assignment.NO_DUE_DATE, w.getAlternateLink());
+                        return new Assignment(w.getId(), w.getTitle(), Assignment.NO_DUE_DATE, w.getAlternateLink(), w.getDescription(), w.getMaxPoints());
                     Calendar dueDate = Calendar.getInstance();
                     dueDate.set(googleDate.getYear(), googleDate.getMonth() - 1, googleDate.getDay());
                     dueDate.clear(Calendar.HOUR);
                     dueDate.clear(Calendar.MINUTE);
                     dueDate.clear(Calendar.SECOND);
                     dueDate.clear(Calendar.MILLISECOND);
-                    return new Assignment(w.getId(), w.getTitle(), dueDate, w.getAlternateLink());
+                    return new Assignment(w.getId(), w.getTitle(), dueDate, w.getAlternateLink(), w.getDescription(), w.getMaxPoints());
                 }).filter(a -> a.compareTo(Calendar.getInstance()) >= 0).collect(Collectors.toList());
                 break;
         }
@@ -328,7 +328,7 @@ public class Bot {
             if (optionMatcher.find()) {
                 command = command.substring(0, optionMatcher.start()) + command.substring(optionMatcher.end());
                 String query = optionMatcher.group(1).trim().toLowerCase().replaceAll("\\W", "");
-                String title = "Assignment details - \"" + query + "\"";
+                String title = "Search results - \"" + query + "\"";
                 int minLevDistance = 1000;
                 Assignment closest = new Assignment();
                 // TODO: Make better matching algorithm
@@ -345,18 +345,28 @@ public class Bot {
                 }
 
                 // Fuck Java lambdas >:(
-                String closestTitle = closest.getTitle();
-                Calendar closestDueDate = closest.getDueDate();
+                Assignment copy = closest;
                 channel.createEmbed(embed -> {
                     embed.setTitle(title);
-                    embed.addField("Closest assignment", closestTitle, false);
-                    SimpleDateFormat formatter = new SimpleDateFormat("MM/dd");
-                    if (closestDueDate != Assignment.NO_DUE_DATE) {
-                        embed.addField("Due date", formatter.format(closestDueDate.getTime()), true);
+                    if (info.getAppType() == ChannelInfo.GOOGLE_CLASSROOM) {
+                        embed.setDescription(String.format("[%s](%s)", copy.getTitle(), copy.getUrl()));
                     } else {
-                        embed.addField("No due date", "-", true);
+                        embed.setDescription(copy.getTitle());
                     }
-                    embed.addField("Test", "Test field", true);
+                    if (copy.getPoints() > 0) {
+                        embed.addField("Points", Double.toString(copy.getPoints()), true);
+                    } else {
+                        embed.addField("Points", "None", true);
+                    }
+                    SimpleDateFormat formatter = new SimpleDateFormat("MM/dd");
+                    if (copy.getDueDate() != Assignment.NO_DUE_DATE) {
+                        embed.addField("Due", formatter.format(copy.getDueDate().getTime()), true);
+                    } else {
+                        embed.addField("Due", "No due date", true);
+                    }
+                    if (copy.getDetails() != null) {
+                        embed.addField("Details", copy.getDetails(), false);
+                    }
                 }).subscribe();
             } else {
                 if (info.getAppType() == ChannelInfo.NONE) {

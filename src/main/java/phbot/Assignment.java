@@ -22,15 +22,22 @@ public class Assignment implements Comparable<Assignment> {
     String id;
     Calendar dueDate;
     String url;
+    String details;
+    double points;
 
     public Assignment() {
     }
 
-    public Assignment(String id, String title, Calendar dueDate, String url) {
+    public Assignment(String id, String title, Calendar dueDate, String url, String details, Double points) {
         this.id = id;
         this.title = title;
         this.dueDate = dueDate;
         this.url = url;
+        this.details = details;
+        if (points != null)
+            this.points = points;
+        else
+            this.points = 0;
     }
 
     public String getTitle() {
@@ -45,6 +52,14 @@ public class Assignment implements Comparable<Assignment> {
         return url;
     }
 
+    public String getDetails() {
+        return details;
+    }
+
+    public double getPoints() {
+        return points;
+    }
+
     public void setTitle(String title) {
         this.title = title;
     }
@@ -55,6 +70,14 @@ public class Assignment implements Comparable<Assignment> {
 
     public void setUrl(String url) {
         this.url = url;
+    }
+
+    public void setDetails(String details) {
+        this.details = details;
+    }
+
+    public void setPoints(int points) {
+        this.points = points;
     }
 
     public Assignment build() {
